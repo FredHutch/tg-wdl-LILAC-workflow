@@ -1,0 +1,3 @@
+{
+  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.batchFile": "s3://fh-pi-paguirigan-a-genomicsrepo/cromwell-manifests/2019-12-10-SPOIL-v2.tsv"
+}
