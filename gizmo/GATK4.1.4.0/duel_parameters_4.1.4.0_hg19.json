@@ -22,7 +22,7 @@
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.annovar_protocols": "refGene,knownGene,dbnsfp35c,cosmic70,esp6500siv2_all,exac03,exac03nontcga,avsnp150,clinvar_20180603,gnomad211_exome",
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.annovar_operation": "g,f,f,f,f,f,f,f,f,f",
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.githubRepoURL": "ssh://git@github.com/FredHutch/tg-wdl-LILAC-workflow.git",
-  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.githubTag": "tobetagged",
+  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.githubTag": "v0.0",
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.RModule": "R/3.6.1-foss-2016b-fh1",
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.GATKModule": "GATK/4.1.4.0-foss-2016b-Python-3.7.4",
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.samtoolsModule": "SAMtools/1.10-foss-2016b",

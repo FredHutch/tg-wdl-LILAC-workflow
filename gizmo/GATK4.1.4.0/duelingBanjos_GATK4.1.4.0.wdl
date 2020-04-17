@@ -137,7 +137,7 @@ scatter (job in batchInfo){
   # Merge original uBAM and BWA-aligned BAM
   call MergeBamAlignment as sampleMergeBamAlignment {
     input:
-      unmapped_bam = sampleBam.file,
+      unmapped_bam = sampleBam,
       aligned_bam = sampleBwaMem.output_bam,
       base_file_name = base_file_name,
       ref_fasta = ref_fasta,
@@ -149,7 +149,7 @@ scatter (job in batchInfo){
   # Merge original uBAM and BWA-aligned BAM
   call MergeBamAlignment as refMergeBamAlignment {
     input:
-      unmapped_bam = refBam.file,
+      unmapped_bam = refBam,
       aligned_bam = refBwaMem.output_bam,
       base_file_name = ref_file_name,
       ref_fasta = ref_fasta,
@@ -264,7 +264,7 @@ scatter (job in batchInfo){
       input:
         input_vcf = Mutect2.output_vcf,
         ref_name = ref_name,
-        annovarTAR = annovarTAR,
+        annovarDIR = annovarDIR,
         annovar_operation = annovar_operation,
         annovar_protocols = annovar_protocols,
         annovarDIR = annovarDIR,
@@ -275,7 +275,7 @@ scatter (job in batchInfo){
       input:
         input_vcf = StrelkaSomatic.vcf,
         ref_name = ref_name,
-        annovarTAR = annovarTAR,
+        annovarDIR = annovarDIR,
         annovar_operation = annovar_operation,
         annovar_protocols = annovar_protocols,
         annovarDIR = annovarDIR,
@@ -289,8 +289,8 @@ scatter (job in batchInfo){
         base_file_name = base_file_name + "." + ref_file_name,
         githubRepoURL = githubRepoURL,
         githubTag = githubTag,
-        molecular_id = molecular_id,
-        ref_molecular_id = ref_molecular_id,
+        molecular_id = sampleID,
+        ref_molecular_id = referenceID,
         modules = RModule
     }
 
@@ -364,10 +364,10 @@ task SamToFastq {
 
     gatk --java-options "-Dsamjdk.compression_level=5 -Xms4g" \
       SamToFastq \
-			--INPUT=${input_bam} \
-			--FASTQ=${base_file_name}.fastq \
-			--INTERLEAVE=true \
-			--INCLUDE_NON_PF_READS=true 
+      --INPUT=${input_bam} \
+      --FASTQ=${base_file_name}.fastq \
+      --INTERLEAVE=true \
+      --INCLUDE_NON_PF_READS=true 
   }
   output {
     File output_fastq = "${base_file_name}.fastq"
