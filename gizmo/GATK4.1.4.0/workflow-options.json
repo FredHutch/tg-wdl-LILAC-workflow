@@ -1,8 +1,8 @@
 {
-    "workflow_failure_mode": "NoNewCalls",
     "default_runtime_attributes": {
-        "maxRetries": 3
+        "continueOnReturnCode": [0, 127]
     },
+    "workflow_failure_mode": "ContinueWhilePossible",
     "write_to_cache": true,
     "read_from_cache": true
 }
