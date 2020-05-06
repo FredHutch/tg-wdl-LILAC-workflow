@@ -14,7 +14,7 @@ remotes::install_github('FredHutch/fh.wdlR')
 
 # Load Packages
 ```{r}
-library(tidyverse); library(tgR); library(fh.wdlR); library(aws.s3)
+library(tidyverse); library(tgR); library(fh.wdlR); library(aws.s3); library(httr)
 ```
 
 # Set Credentials
@@ -112,12 +112,14 @@ thisOne <- thisJob$id; thisOne
 
 # See all the  jobs this server has run in the past (x) days
 ```{r}
-afew <- 1
+afew <- 2
 jobs <- cromwellJobs(days = afew) %>% arrange(desc(start))
+jobs <- cromwellJobs(4)
 ```
 
 # Isolate one workflow
 ```{r}
+
 thisOne <- jobs$workflow_id[1]
 ```
 
@@ -154,10 +156,26 @@ cromwellTiming(thisOne)
 out <- cromwellOutputs(thisOne) 
 ```
 
+## Get CopyNTag
 See CopyNTag wdl workflow to deposit and tag data.  
 
+Workflow is:  tg-wdl-copyNTag
+Download the current master branch copy and unzip the file. 
+```{r}
+workflowDir <- paste0("./Workflows/validatetwoworkflows/copy-", thisOne, "/")
+repoName <- "FredHutch/tg-wdl-copyNTag"
 
+this <- httr::GET(url = paste0("https://github.com/", repoName ,"/archive/master.zip"),
+    httr::authenticate(Sys.getenv("GITUSERNAME"), Sys.getenv("GITTOKEN")),
+    httr::write_disk(paste0(workflowDir, "master.zip"), overwrite = TRUE))
 
+unzip(zipfile = paste0(workflowDir, "master.zip"),
+      exdir = workflowDir)
+file.remove(paste0(workflowDir, "master.zip"))
+
+list.dirs(path = workflowDir)
+workflowFiles <-  "./Workflows/validatetwoworkflows/copy-91291e5c-8c64-4df4-b1e1-ae636c9f2f31//gizmo"
+```
 
 
 

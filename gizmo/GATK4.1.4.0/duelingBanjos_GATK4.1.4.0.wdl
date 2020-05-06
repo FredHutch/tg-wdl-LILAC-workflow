@@ -489,7 +489,8 @@ task MarkDuplicates {
  # This works because the output of BWA is query-grouped and therefore, so is the output of MergeBamAlignment.
  # While query-grouped isn't actually query-sorted, it's good enough for MarkDuplicates with ASSUME_SORT_ORDER="queryname"
   command {
-    gatk --java-options "-Dsamjdk.compression_level=5 -Xms4g" \
+    set -eo
+    gatk --java-options "-XX:+UseParallelGC -XX:ParallelGCThreads=4 -Dsamjdk.compression_level=5 -Xms4g" \
       MarkDuplicates \
       --INPUT ${input_bam} \
       --OUTPUT ${output_bam_basename}.bam \
@@ -523,7 +524,7 @@ task SortAndFixTags {
   }
 
   command {
-    set -o pipefail
+    set -eo pipefail
 
     gatk --java-options "-Dsamjdk.compression_level=5 -Xms4g" \
       SortSam \

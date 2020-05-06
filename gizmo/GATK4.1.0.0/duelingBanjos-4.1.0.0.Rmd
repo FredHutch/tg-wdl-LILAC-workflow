@@ -26,7 +26,7 @@ setCreds(path = "~/github/cred/paguirigan.R")
 ```{r}
 bucket <- "fh-pi-berger-a"; DAG  <- "bergera"
 tags <- listS3Objects(bucket = bucket)
-annotations <- tgrAnnotate(DAG = DAG, harmonizedOnly = FALSE)
+annotations <- tgrAnnotate(DAG = "paguirigana", harmonizedOnly = FALSE)
 monsterMash <- dplyr::left_join(tags, annotations) %>% dropWhen()
 ```
 
@@ -151,7 +151,29 @@ cromwellTiming(thisOne)
 out <- cromwellOutputs(thisOne) 
 ```
 
+
+## Get CopyNTag
 See CopyNTag wdl workflow to deposit and tag data.  
+
+Workflow is:  tg-wdl-copyNTag
+Download the current master branch copy and unzip the file. 
+```{r}
+workflowDir <- paste0("./Workflows/validatetwoworkflows/copy-", thisOne, "/")
+repoName <- "FredHutch/tg-wdl-copyNTag"
+
+this <- httr::GET(url = paste0("https://github.com/", repoName ,"/archive/master.zip"),
+    httr::authenticate(Sys.getenv("GITUSERNAME"), Sys.getenv("GITTOKEN")),
+    httr::write_disk(paste0(workflowDir, "master.zip"), overwrite = TRUE))
+
+unzip(zipfile = paste0(workflowDir, "master.zip"),
+      exdir = workflowDir)
+file.remove(paste0(workflowDir, "master.zip"))
+
+list.dirs(path = workflowDir)
+workflowFiles <-  "./Workflows/validatetwoworkflows/copy-b926e171-6550-433d-913a-d892d053fd6b//tg-wdl-copyNTag-master/gizmo"   
+```
+
+
 
 
 

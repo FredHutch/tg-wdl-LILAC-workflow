@@ -1,7 +1,7 @@
 {
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.ref_name": "hg19",
-  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.gnomad": "/fh/fast/paguirigan_a/pub/ReferenceDataSets/genome_data/human/hg19/gnomad.exomes.r2.1.1.sites.vcf.bgz",
-  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.gnomad_index": "/fh/fast/paguirigan_a/pub/ReferenceDataSets/genome_data/human/hg19/gnomad.exomes.r2.1.1.sites.vcf.bgz.tbi",
+  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.gnomad": "/fh/fast/paguirigan_a/pub/ReferenceDataSets/genome_data/human/hg19/af-only-gnomad.raw.sites.b37_ucsc.19.vcf.gz",
+  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.gnomad_index": "/fh/fast/paguirigan_a/pub/ReferenceDataSets/genome_data/human/hg19/af-only-gnomad.raw.sites.b37_ucsc.19.vcf.gz.tbi",
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.ref_fasta": "/fh/fast/paguirigan_a/pub/ReferenceDataSets/genome_data/human/hg19/ucsc.hg19.fasta",
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.ref_fasta_index": "/fh/fast/paguirigan_a/pub/ReferenceDataSets/genome_data/human/hg19/ucsc.hg19.fasta.fai",
   "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.ref_dict": "/fh/fast/paguirigan_a/pub/ReferenceDataSets/genome_data/human/hg19/ucsc.hg19.dict",
