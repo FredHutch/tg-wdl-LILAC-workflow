@@ -9,7 +9,7 @@ version 1.0
 ##
 ## Output Files:
 ## - An analysis-ready recalibrated bam and it's index for both the "sample" and the "reference"
-## - GATK-Mutect2 vcf from GATK 4.1.0.0
+## - GATK-Mutect2 vcf from GATK 4.1.4.0
 ## - Strelka vcf
 ## - Annovar annotated vcfs and tabular variant list for each variant caller
 ## - Basic QC stats from bedtools for mean coverage over regions in panel
@@ -37,34 +37,37 @@ workflow HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants {
     File dbSNP_vcf_index
     Array[File] known_indels_sites_VCFs
     Array[File] known_indels_sites_indices
+    File gnomad
+    File gnomad_index
     # Annovar package
-    String annovarDIR
+    String annovarTAR
     String annovar_protocols
     String annovar_operation
-    # Gizmo Modules
-    String GATKModule
-    String samtoolsModule
-    String bedtoolsModule
-    String perlModule
-    String bwaModule
-    String strelkaModule
-    String bcftoolsModule
-    String RModule
     # consensus script
     String githubRepoURL
     String githubTag
-}
+    String RModule
+  }
+    # Docker containers this workflow has been designed for
+    String GATKdocker = "broadinstitute/gatk:4.1.4.0"
+    String bwadocker = "fredhutch/bwa:0.7.17"
+    String bedtoolsdocker = "fredhutch/bedtools:2.28.0" 
+    String bcftoolsdocker = "fredhutch/bcftools:1.9"
+    String perldocker = "perl:5.28.0"
+    String strelkadocker = "fredhutch/strelka:2.9.10"
     Array[Object] batchInfo = read_objects(batchFile)
+
 scatter (job in batchInfo){
-    # variables
+  # variables
   String sampleName = job.sampleName
   String referenceName = job.referenceName
   String sampleID = job.molecular_id
   String referenceID = job.ref_molecular_id
-    # s3 files to retrieve
+  # s3 files to retrieve
   File refBam = job.refBamLocation
   File sampleBam = job.sampleBamLocation
   File bedFile = job.bedLocation
+
 
 # Get the basename, i.e. strip the filepath and the extension
   String bam_basename = basename(sampleBam, ".unmapped.bam")
@@ -72,12 +75,13 @@ scatter (job in batchInfo){
   String base_file_name = bam_basename + "." + ref_name
   String ref_file_name = ref_basename + "." + ref_name
 
+
   # Prepare bed file and check sorting
   call SortBed {
     input:
       unsorted_bed = bedFile,
       ref_dict = ref_dict,
-      modules = GATKModule
+      docker = GATKdocker
   }
 
   # Convert unmapped bam to interleaved fastq
@@ -85,7 +89,7 @@ scatter (job in batchInfo){
     input:
       input_bam = sampleBam,
       base_file_name = base_file_name,
-      modules = GATKModule
+      docker = GATKdocker
   }
 
   # Convert unmapped bam to interleaved fastq
@@ -93,7 +97,7 @@ scatter (job in batchInfo){
     input:
       input_bam = refBam,
       base_file_name = ref_file_name,
-      modules = GATKModule
+      docker = GATKdocker
   }
 
   #  Map reads to reference
@@ -110,7 +114,7 @@ scatter (job in batchInfo){
       ref_bwt = ref_bwt,
       ref_pac = ref_pac,
       ref_sa = ref_sa,
-      modules = samtoolsModule + " " + bwaModule
+      docker = bwadocker
   }
 
   #  Map reads to reference
@@ -127,7 +131,7 @@ scatter (job in batchInfo){
       ref_bwt = ref_bwt,
       ref_pac = ref_pac,
       ref_sa = ref_sa,
-      modules = samtoolsModule + " " + bwaModule
+      docker = bwadocker
   }
 
   # Merge original uBAM and BWA-aligned BAM
@@ -139,7 +143,7 @@ scatter (job in batchInfo){
       ref_fasta = ref_fasta,
       ref_fasta_index = ref_fasta_index,
       ref_dict = ref_dict,
-      modules = GATKModule
+      docker = GATKdocker
   }
 
   # Merge original uBAM and BWA-aligned BAM
@@ -151,14 +155,53 @@ scatter (job in batchInfo){
       ref_fasta = ref_fasta,
       ref_fasta_index = ref_fasta_index,
       ref_dict = ref_dict,
-      modules = GATKModule
+      docker = GATKdocker
+  }
+
+    # Aggregate aligned+merged flowcell BAM files and mark duplicates
+  call MarkDuplicates as sampleMarkDuplicates {
+    input:
+      input_bam = sampleMergeBamAlignment.output_bam,
+      output_bam_basename = base_file_name + ".aligned.duplicates_marked",
+      metrics_filename = base_file_name + ".duplicate_metrics",
+      docker = GATKdocker
+  }
+
+  call MarkDuplicates as refMarkDuplicates {
+    input:
+      input_bam =refMergeBamAlignment.output_bam,
+      output_bam_basename = ref_file_name + ".aligned.duplicates_marked",
+      metrics_filename = ref_file_name + ".duplicate_metrics",
+      docker = GATKdocker
+  }
+
+    # Sort aggregated+deduped BAM file and fix tags
+  call SortAndFixTags as sampleSortAndFixTags {
+    input:
+      input_bam = sampleMarkDuplicates.output_bam,
+      output_bam_basename = base_file_name + ".aligned.duplicate_marked.sorted",
+      ref_dict = ref_dict,
+      ref_fasta = ref_fasta,
+      ref_fasta_index = ref_fasta_index,
+      docker = GATKdocker
+  }
+
+    # Sort aggregated+deduped BAM file and fix tags
+  call SortAndFixTags as refSortAndFixTags {
+    input:
+      input_bam = refMarkDuplicates.output_bam,
+      output_bam_basename = base_file_name + ".aligned.duplicate_marked.sorted",
+      ref_dict = ref_dict,
+      ref_fasta = ref_fasta,
+      ref_fasta_index = ref_fasta_index,
+      docker = GATKdocker
   }
 
   # Generate the recalibration model by interval and apply it
-  call ApplyBaseRecalibrator  as sampleApplyBaseRecalibrator {
+  call ApplyBaseRecalibrator as sampleApplyBaseRecalibrator {
     input:
-      input_bam = sampleMergeBamAlignment.output_bam,
-      input_bam_index = sampleMergeBamAlignment.output_bai,
+      input_bam = sampleSortAndFixTags.output_bam,
+      input_bam_index = sampleSortAndFixTags.output_bai,
       base_file_name = base_file_name,
       intervals = SortBed.intervals,
       dbSNP_vcf = dbSNP_vcf,
@@ -168,14 +211,14 @@ scatter (job in batchInfo){
       ref_dict = ref_dict,
       ref_fasta = ref_fasta,
       ref_fasta_index = ref_fasta_index,
-      modules = samtoolsModule + " " + GATKModule
+      docker = GATKdocker
     }
 
   # Generate the recalibration model by interval and apply it
-  call ApplyBaseRecalibrator  as refApplyBaseRecalibrator {
+  call ApplyBaseRecalibrator as refApplyBaseRecalibrator {
     input:
-      input_bam = refMergeBamAlignment.output_bam,
-      input_bam_index = refMergeBamAlignment.output_bai,
+      input_bam = refSortAndFixTags.output_bam,
+      input_bam_index = refSortAndFixTags.output_bai,
       base_file_name = ref_file_name,
       intervals = SortBed.intervals,
       dbSNP_vcf = dbSNP_vcf,
@@ -185,7 +228,7 @@ scatter (job in batchInfo){
       ref_dict = ref_dict,
       ref_fasta = ref_fasta,
       ref_fasta_index = ref_fasta_index,
-      modules = samtoolsModule + " " + GATKModule
+      docker = GATKdocker
     }
 
     call bedToolsQC as samplebedToolsQC {
@@ -194,7 +237,7 @@ scatter (job in batchInfo){
         genome_sort_order = sampleApplyBaseRecalibrator.sortOrder,
         bed_file = SortBed.sorted_bed,
         base_file_name = base_file_name,
-        modules = bedtoolsModule
+        docker = bedtoolsdocker
     }
     call bedToolsQC as refbedToolsQC {
       input: 
@@ -202,7 +245,7 @@ scatter (job in batchInfo){
         genome_sort_order = refApplyBaseRecalibrator.sortOrder,
         bed_file = SortBed.sorted_bed,
         base_file_name = ref_file_name,
-        modules = bedtoolsModule
+        docker = bedtoolsdocker
     }
 
     call CollectHsMetrics as sampleHSMetrics {
@@ -212,7 +255,7 @@ scatter (job in batchInfo){
         ref_fasta = ref_fasta,
         ref_fasta_index = ref_fasta_index,
         intervals = SortBed.intervals,
-        modules = GATKModule
+        docker = GATKdocker
     }
 
     call CollectHsMetrics as refHSMetrics {
@@ -222,7 +265,7 @@ scatter (job in batchInfo){
         ref_fasta = ref_fasta,
         ref_fasta_index = ref_fasta_index,
         intervals = SortBed.intervals,
-        modules = GATKModule
+        docker = GATKdocker
     }
 
   # Generate Mutect2 vcf
@@ -238,8 +281,26 @@ scatter (job in batchInfo){
       ref_dict = ref_dict,
       ref_fasta = ref_fasta,
       ref_fasta_index = ref_fasta_index,
-      modules = samtoolsModule + " " + GATKModule
+      gnomad = gnomad,
+      gnomad_idx = gnomad_index,
+      docker = GATKdocker
     }
+
+  call FilterMutectCalls {
+    input:
+      ref_fasta = ref_fasta,
+      ref_fasta_index = ref_fasta_index,
+      ref_dict = ref_dict,
+      intervals = SortBed.intervals,
+      unfiltered_vcf = Mutect2.output_vcf,
+      unfiltered_vcf_idx = Mutect2.output_vcf_index,
+      statsFile = Mutect2.stats,
+      artifact_priors_tar_gz = Mutect2.artifact_prior_table,
+      base_file_name = base_file_name,
+      ref_file_name = ref_file_name,
+      docker = GATKdocker
+  }
+
   # Use Strelka somatic variant caller
   call StrelkaSomatic {
     input:
@@ -252,30 +313,30 @@ scatter (job in batchInfo){
         referenceFasta = ref_fasta,
         referenceFastaFai = ref_fasta_index,
         bed_file = SortBed.sorted_bed,
-        modules = bcftoolsModule + " " + samtoolsModule + " " + strelkaModule
+        docker = strelkadocker
     }
 
     # Annotate variants
     call annovar as mutectAnnovar {
       input:
-        input_vcf = Mutect2.output_vcf,
+        input_vcf = FilterMutectCalls.filtered_vcf,
         ref_name = ref_name,
-        annovarDIR = annovarDIR,
+        annovarTAR = annovarTAR,
         annovar_operation = annovar_operation,
         annovar_protocols = annovar_protocols,
-        annovarDIR = annovarDIR,
-        modules = perlModule
+        annovarTAR = annovarTAR,
+        docker = perldocker
     }
     # Annotate Strelka variants
     call annovar as strelkaAnnovar {
       input:
         input_vcf = StrelkaSomatic.vcf,
         ref_name = ref_name,
-        annovarDIR = annovarDIR,
+        annovarTAR = annovarTAR,
         annovar_operation = annovar_operation,
         annovar_protocols = annovar_protocols,
-        annovarDIR = annovarDIR,
-        modules = perlModule
+        annovarTAR = annovarTAR,
+        docker = perldocker
     }
 
     call consensusFiltering {
@@ -298,11 +359,11 @@ scatter (job in batchInfo){
     Array[File] analysisReadyIndex = sampleApplyBaseRecalibrator.recalibrated_bai
     Array[File] analysisReadyRefBam = refApplyBaseRecalibrator.recalibrated_bam
     Array[File] analysisReadyRefIndex = refApplyBaseRecalibrator.recalibrated_bai
-    Array[File] mutectVcf = Mutect2.output_vcf
-    Array[File] mutectVcfIndex = Mutect2.output_vcf_index
+    Array[File] mutectVcf = FilterMutectCalls.filtered_vcf
+    Array[File] mutectVcfIndex = FilterMutectCalls.filtered_vcf_index
+    Array[File] mutectVcfStats = FilterMutectCalls.filter_stats
     Array[File] mutectAnnotatedVcf = mutectAnnovar.output_annotated_vcf
     Array[File] mutectAnnotatedTable = mutectAnnovar.output_annotated_table
-    Array[File] mutectStats = Mutect2.statsFile
     Array[File] strelkaVcf = StrelkaSomatic.vcf
     Array[File] strelkaVcfIndex = StrelkaSomatic.vcfIndex
     Array[File] strelkaAnnotatedVcf = strelkaAnnovar.output_annotated_vcf
@@ -317,8 +378,6 @@ scatter (job in batchInfo){
   }
 # End workflow
 }
-
-
 #### TASK DEFINITIONS
 
 # Prepare bed file and check sorting
@@ -326,7 +385,7 @@ task SortBed {
   input {
     File unsorted_bed
     File ref_dict
-    String modules
+    String docker
   }
   command {
     set -eo pipefail
@@ -346,8 +405,8 @@ task SortBed {
     File sorted_bed = "sorted.bed"
   }
   runtime {
-    memory: "8GB"
-    modules: "${modules}"
+    memory: "8 GB"
+    docker: docker
   }
 }
 
@@ -356,24 +415,24 @@ task SamToFastq {
   input {
     File input_bam
     String base_file_name
-    String modules
+    String docker
   }
   command {
     set -eo pipefail
 
-    gatk --java-options "-Dsamjdk.compression_level=5 -Xms4g" \
+    gatk --java-options "-Dsamjdk.compression_level=5 -Xms8g" \
       SamToFastq \
       --INPUT=${input_bam} \
-      --FASTQ=${base_file_name}.fastq \
+      --FASTQ=${base_file_name}.fastq.gz \
       --INTERLEAVE=true \
       --INCLUDE_NON_PF_READS=true 
   }
   output {
-    File output_fastq = "${base_file_name}.fastq"
+    File output_fastq = "${base_file_name}.fastq.gz"
   }
   runtime {
-    memory: "16GB"
-    modules: "${modules}"
+    memory: "16 GB"
+    docker: docker
   }
 }
 
@@ -392,7 +451,7 @@ task BwaMem {
     File ref_bwt
     File ref_pac
     File ref_sa
-    String modules
+    String docker
   }
   command {
     set -eo pipefail
@@ -406,10 +465,91 @@ task BwaMem {
     File output_bam = "${base_file_name}.aligned.bam"
   }
   runtime {
-    memory: "48GB"
+    memory: "48 GB"
     cpu: 16
-    partition: "largenode"
-    modules: "${modules}"
+    docker: docker
+  }
+}
+
+
+# Mark duplicate reads to avoid counting non-independent observations
+## For speed https://www.biorxiv.org/content/10.1101/348565v1.full.pdf
+##    gatk --java-options "-XX:+UseParallelGC -XX:ParallelGCThreads=4 -Dsamjdk.compression_level=5 -Xms4g" \
+
+task MarkDuplicates {
+  input {
+    File input_bam
+    String output_bam_basename
+    String metrics_filename
+    String docker
+  }
+
+ # Task is assuming query-sorted input so that the Secondary and Supplementary reads get marked correctly.
+ # This works because the output of BWA is query-grouped and therefore, so is the output of MergeBamAlignment.
+ # While query-grouped isn't actually query-sorted, it's good enough for MarkDuplicates with ASSUME_SORT_ORDER="queryname"
+  command {
+    set -eo
+    gatk --java-options "-XX:+UseParallelGC -XX:ParallelGCThreads=4 -Dsamjdk.compression_level=5 -Xms4g" \
+      MarkDuplicates \
+      --INPUT ${input_bam} \
+      --OUTPUT ${output_bam_basename}.bam \
+      --METRICS_FILE ${metrics_filename} \
+      --VALIDATION_STRINGENCY SILENT \
+      --OPTICAL_DUPLICATE_PIXEL_DISTANCE 2500 \
+      --ASSUME_SORT_ORDER "queryname" \
+      --CREATE_MD5_FILE false \
+      --REMOVE_DUPLICATES false \
+      --REMOVE_SEQUENCING_DUPLICATES false
+  }
+  runtime {
+    docker: docker
+    cpu: 4
+    memory: "36 GB"
+  }
+  output {
+    File output_bam = "${output_bam_basename}.bam"
+    File duplicate_metrics = "${metrics_filename}"
+  }
+}
+
+# Sort BAM file by coordinate order and fix tag values for NM and UQ
+task SortAndFixTags {
+  input {
+    File input_bam
+    String output_bam_basename
+    File ref_dict
+    File ref_fasta
+    File ref_fasta_index
+    String docker
+  }
+
+  command {
+    set -eo pipefail
+
+    gatk --java-options "-Dsamjdk.compression_level=5 -Xms4g" \
+      SortSam \
+      --INPUT ${input_bam} \
+      --OUTPUT /dev/stdout \
+      --SORT_ORDER "coordinate" \
+      --CREATE_INDEX false \
+      --CREATE_MD5_FILE false \
+      | \
+    gatk --java-options "-Dsamjdk.compression_level=5 -Xms4g" \
+      SetNmMdAndUqTags \
+      --INPUT /dev/stdin \
+      --OUTPUT ${output_bam_basename}.bam \
+      --CREATE_INDEX true \
+      --CREATE_MD5_FILE true \
+      --REFERENCE_SEQUENCE ${ref_fasta}
+  }
+  runtime {
+    docker: docker
+    cpu: 4
+    memory: "16 GB"
+  }
+  output {
+    File output_bam = "${output_bam_basename}.bam"
+    File output_bai = "${output_bam_basename}.bai"
   }
 }
 
@@ -423,12 +563,12 @@ task MergeBamAlignment {
     File ref_fasta
     File ref_fasta_index
     File ref_dict
-    String modules
+    String docker
   }
   command {
     set -eo pipefail
 
-    gatk --java-options "-Dsamjdk.compression_level=5 -XX:-UseGCOverheadLimit -Xmx8g" \
+    gatk --java-options "-Dsamjdk.compression_level=5 -XX:-UseGCOverheadLimit -Xmx12g" \
       MergeBamAlignment \
       --VALIDATION_STRINGENCY SILENT \
       --EXPECTED_ORIENTATIONS FR \
@@ -438,25 +578,25 @@ task MergeBamAlignment {
       --OUTPUT ${base_file_name}.merged.bam \
       --REFERENCE_SEQUENCE ${ref_fasta} \
       --PAIRED_RUN true \
-      --SORT_ORDER coordinate \
+      --SORT_ORDER queryname \
       --IS_BISULFITE_SEQUENCE false \
       --ALIGNED_READS_ONLY false \
       --CLIP_ADAPTERS false \
-      --MAX_RECORDS_IN_RAM 200000 \
+      --MAX_RECORDS_IN_RAM 500000 \
       --ADD_MATE_CIGAR true \
       --MAX_INSERTIONS_OR_DELETIONS -1 \
       --PRIMARY_ALIGNMENT_STRATEGY MostDistant \
       --UNMAPPED_READ_STRATEGY COPY_TO_TAG \
       --ALIGNER_PROPER_PAIR_FLAGS true \
-      --CREATE_INDEX true
+      --CREATE_INDEX false
   }
   output {
     File output_bam = "${base_file_name}.merged.bam"
-    File output_bai = "${base_file_name}.merged.bai"
   }
   runtime {
-    memory: "16GB"
-    modules: "${modules}"
+    memory: "16 GB"
+    cpu: 2
+    docker: docker
   }
 }
 
@@ -474,14 +614,14 @@ task ApplyBaseRecalibrator {
     File ref_dict
     File ref_fasta
     File ref_fasta_index
-    String modules
+    String docker
   }
   command {
   set -eo pipefail
 
   samtools index ${input_bam}
 
-  gatk --java-options "-Xms4g" \
+  gatk --java-options "-Xms8g" \
       BaseRecalibrator \
       -R ${ref_fasta} \
       -I ${input_bam} \
@@ -491,7 +631,7 @@ task ApplyBaseRecalibrator {
       --intervals ${intervals} \
       --interval-padding 100 
 
-  gatk --java-options "-Xms4g" \
+  gatk --java-options "-Xms8g" \
       ApplyBQSR \
       -bqsr ${base_file_name}.recal_data.csv \
       -I ${input_bam} \
@@ -510,10 +650,9 @@ task ApplyBaseRecalibrator {
     File sortOrder = "${base_file_name}.sortOrder.txt"
   }
   runtime {
-    memory: "33GB"
+    memory: "36 GB"
     cpu: 6
-    partition: "largenode"
-    modules: "${modules}"
+    docker: docker
   }
 }
 
@@ -524,7 +663,7 @@ task bedToolsQC {
     File bed_file
     File genome_sort_order
     String base_file_name
-    String modules
+    String docker
   }
   command {
   set -eo pipefail
@@ -537,9 +676,10 @@ task bedToolsQC {
     File meanQC = "${base_file_name}.bedtoolsQCMean.txt"
   }
   runtime {
-    modules: "${modules}"
+    docker: docker
   }
 }
+
 
 # Mutect 2 calling
 task Mutect2 {
@@ -552,14 +692,18 @@ task Mutect2 {
     File ref_dict
     File ref_fasta
     File ref_fasta_index
+    File gnomad
+    File gnomad_idx
     String sampleID
     String referenceID
-    String modules
+    String docker
   }
+  ## Need to add PON and germline resource
   command {
     set -eo pipefail
-      # Just in case the bam header isn't the referenceID or sampleID
-    gatk --java-options "-Xmx24g" \
+
+  # Just in case the bam header isn't the referenceID or sampleID
+    gatk --java-options "-Xms12g" \
       AddOrReplaceReadGroups \
         -I=${input_ref_bam} \
         -O=reference.bam \
@@ -568,9 +712,8 @@ task Mutect2 {
         -PL=illumina \
         -PU=unknown 
 
-    samtools index reference.bam
-  
-    gatk --java-options "-Xmx24g" \
+
+    gatk --java-options "-Xms12g" \
       AddOrReplaceReadGroups \
         -I=${input_bam} \
         -O=tumor.bam \
@@ -579,36 +722,89 @@ task Mutect2 {
         -PL=illumina \
         -PU=unknown 
     
-    samtools index tumor.bam
-    
-    gatk --java-options "-Xmx24g" \
-      Mutect2 \
-      -R ${ref_fasta} \
-      -I tumor.bam \
-      -I reference.bam \
-      -normal ${referenceID} \
-      -tumor ${sampleID} \
-      -O preliminary.vcf.gz \
-      --intervals ${intervals} \
-      --interval-padding 100 
 
-    gatk --java-options "-Xmx24g" \
-      FilterMutectCalls \
-      -V preliminary.vcf.gz \
-      -O ${base_file_name}.mutect2.vcf.gz \
-      --stats ${base_file_name}.mutect2FilterStats.tsv
+    samtools index tumor.bam
+    samtools index reference.bam
+  
+
+  ## Mutect with FFPE artifact bias filter
+    gatk --java-options "-Xms12g" \
+      Mutect2 \
+        -R ${ref_fasta} \
+        -I tumor.bam \
+        -I reference.bam \
+        -normal ${referenceID} \
+        -tumor ${sampleID} \
+        -O ${base_file_name}_${ref_file_name}.mutect2.unfiltered.vcf.gz \
+        --intervals ${intervals} \
+        --interval-padding 100  \
+        --f1r2-tar-gz f1r2.tar.gz \
+        --germline-resource ${gnomad}
+
+  # This creates an output with raw data used to learn the orientation bias model
+    gatk --java-options "-Xms12g" \
+      LearnReadOrientationModel \
+        -I f1r2.tar.gz \
+        -O ${base_file_name}.read-orientation-model.tar.gz
     }
   output {
-    File output_vcf = "${base_file_name}.mutect2.vcf.gz"
-    File output_vcf_index = "${base_file_name}.mutect2.vcf.gz.tbi"
-    File statsFile = "${base_file_name}.mutect2FilterStats.tsv"
+    File output_vcf = "${base_file_name}_${ref_file_name}.mutect2.unfiltered.vcf.gz"
+    File output_vcf_index = "${base_file_name}_${ref_file_name}.mutect2.unfiltered.vcf.gz.tbi"
+    File artifact_prior_table = "${base_file_name}.read-orientation-model.tar.gz"
+    File stats = "${base_file_name}_${ref_file_name}.mutect2.unfiltered.vcf.gz.stats"
   }
   runtime {
-    memory: "30GB"
+    memory: "36 GB"
     cpu: 4
-    modules: "${modules}"
+    docker: docker
   }
 }
+
+
+task FilterMutectCalls {
+  input {
+    String base_file_name
+    String ref_file_name
+    File statsFile
+    File intervals
+    File ref_fasta
+    File ref_fasta_index
+    File ref_dict
+    File unfiltered_vcf
+    File unfiltered_vcf_idx
+    File? mutect_stats
+    File artifact_priors_tar_gz
+    File? contamination_table
+    String docker
+  }
+  command {
+
+  # Finally, pass the learned read orientation model to FilterMutectCallswith the -ob-priors argument:
+    gatk --java-options "-Xms12g" \
+      FilterMutectCalls \
+        -V ${unfiltered_vcf} \
+        --ob-priors ${artifact_priors_tar_gz} \
+        -O ${base_file_name}_${ref_file_name}.filtered.mutect2.vcf.gz \
+        -R ${ref_fasta} \
+        ~{"--contamination-table " + contamination_table} \
+        ~{"--ob-priors " + artifact_priors_tar_gz} \
+        ~{"-stats " + mutect_stats} \
+        --filtering-stats ${base_file_name}.filtering.stats 
+  }
+  output {
+    File filter_stats = "${base_file_name}.filtering.stats"
+    File filtered_vcf = "${base_file_name}_${ref_file_name}.filtered.mutect2.vcf.gz"
+    File filtered_vcf_index = "${base_file_name}_${ref_file_name}.filtered.mutect2.vcf.gz.tbi"
+  }
+  runtime {
+    docker: docker
+    memory: "36 GB"
+    cpu: 4
+  }
+}
+
+
+
 
 # annotate with annovar
 task annovar {
@@ -617,14 +813,16 @@ task annovar {
     String ref_name
     String annovar_protocols
     String annovar_operation
-    String annovarDIR
-    String modules
+    File annovarTAR
+    String docker
   }
-  String base_vcf_name = basename(input_vcf, ".vcf")
+  String base_vcf_name = basename(input_vcf, ".vcf.gz")
   command {
   set -eo pipefail
 
-  perl ${annovarDIR}/annovar/table_annovar.pl ${input_vcf} ${annovarDIR}/annovar/humandb/ \
+  tar -xzvf ${annovarTAR}
+
+  perl annovar/table_annovar.pl ${input_vcf} annovar/humandb/ \
     -buildver ${ref_name} \
     -outfile ${base_vcf_name} \
     -remove \
@@ -637,10 +835,11 @@ task annovar {
     File output_annotated_table = "${base_vcf_name}.${ref_name}_multianno.txt"
   }
   runtime {
-    modules: "${modules}"
+    docker: docker
   }
 }
 
+# Hard coded 16 cpu
 task StrelkaSomatic {
   input {
     File normalBam
@@ -652,7 +851,7 @@ task StrelkaSomatic {
     File bed_file
     String base_file_name
     String ref_file_name
-    String modules
+    String docker
   }
   command {
     set -eo pipefail
@@ -674,8 +873,8 @@ task StrelkaSomatic {
 
     tempDir/runWorkflow.py \
         -m local \
-        -j 16 \
-        -g 24
+        -j 36 \
+        -g 42
         ## j is the number of cores available
         ## g is the amount of memory available
 
@@ -703,10 +902,9 @@ task StrelkaSomatic {
       File vcfIndex = "${base_file_name}_${ref_file_name}.strelka.vcf.gz.tbi"
     }
     runtime {
-      memory: "48GB"
-      cpu: 16
-      partition: "largenode"
-      modules: "${modules}"
+      memory: "48 GB"
+      cpu: 36
+      docker: docker
     }
 }
 
@@ -718,7 +916,7 @@ task CollectHsMetrics {
     File ref_fasta
     File ref_fasta_index
     File intervals
-    String modules
+    String docker
   }
   command {
     set -eo pipefail
@@ -738,11 +936,10 @@ task CollectHsMetrics {
     File picardPerTarget = "${base_file_name}.picard.pertarget.txt"
   }
   runtime {
-    memory: "4GB"
-    modules: "${modules}"
+    memory: "4 GB"
+    docker: docker
   }
 }
-
 
 task consensusFiltering {
   input {
@@ -758,14 +955,14 @@ task consensusFiltering {
   command {
     set -eo pipefail
     git clone --branch ${githubTag} ${githubRepoURL}
-    Rscript ./tg-wdl-LILAC-workflow/gizmo/ConsensusFiltering/consensus-Mutect2-Strelka.R \
+    Rscript ./tg-wdl-LILAC-workflow/ConsensusFiltering/consensus-Mutect2-Strelka.R \
       ${MutectVars} ${StrVars} ${base_file_name} ${molecular_id} ${ref_molecular_id}
   }
   output {
     File consensusfile = "${base_file_name}.consensus.tsv"
   }
   runtime {
-    memory: "8GB"
-    modules: "${modules}"
+    memory: "8 GB"
+    modules: modules
   }
 }
