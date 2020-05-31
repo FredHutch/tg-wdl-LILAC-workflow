@@ -17,8 +17,11 @@ version 1.0
 ## 
 workflow HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants {
   input {
-    # Batch information
+    # Batch and cohort information
     File batchFile
+    File bedFile
+    File pon
+    File pon_index
     # Reference Genome information
     String ref_name
     File ref_fasta
@@ -43,10 +46,9 @@ workflow HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants {
     String annovarTAR
     String annovar_protocols
     String annovar_operation
-    # consensus script
+    # consensus formatting script
     String githubRepoURL
     String githubTag
-    String RModule
   }
     # Docker containers this workflow has been designed for
     String GATKdocker = "broadinstitute/gatk:4.1.4.0"
@@ -54,9 +56,20 @@ workflow HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants {
     String bedtoolsdocker = "fredhutch/bedtools:2.28.0" 
     String bcftoolsdocker = "fredhutch/bcftools:1.9"
     String perldocker = "perl:5.28.0"
-    String strelkadocker = "fredhutch/strelka:2.9.10"
+    String strelkamodule = "strelka/2.9.9-foss-2018b SAMtools/1.10-GCCcore-8.3.0 BCFtools/1.9-GCC-8.3.0" 
+    # Unfortunately had to use a module instead of docker here due to technical problems, not Strelka software issues.,
+    String RModule =  "R/3.6.2-foss-2019b-fh1"
+    # Same for R, but any R after 3.6.0 byt before 4.0 would do this formatting step anyway - it's not super critical what version runs it. 
+    
     Array[Object] batchInfo = read_objects(batchFile)
 
+  # Prepare bed file and check sorting
+  call SortBed {
+    input:
+      unsorted_bed = bedFile,
+      ref_dict = ref_dict,
+      docker = GATKdocker
+  }
 scatter (job in batchInfo){
   # variables
   String sampleName = job.sampleName
@@ -66,23 +79,12 @@ scatter (job in batchInfo){
   # s3 files to retrieve
   File refBam = job.refBamLocation
   File sampleBam = job.sampleBamLocation
-  File bedFile = job.bedLocation
-
 
 # Get the basename, i.e. strip the filepath and the extension
   String bam_basename = basename(sampleBam, ".unmapped.bam")
   String ref_basename = basename(refBam, ".unmapped.bam")
   String base_file_name = bam_basename + "." + ref_name
   String ref_file_name = ref_basename + "." + ref_name
-
-
-  # Prepare bed file and check sorting
-  call SortBed {
-    input:
-      unsorted_bed = bedFile,
-      ref_dict = ref_dict,
-      docker = GATKdocker
-  }
 
   # Convert unmapped bam to interleaved fastq
   call SamToFastq as sampleSamToFastq {
@@ -159,7 +161,7 @@ scatter (job in batchInfo){
   }
 
     # Aggregate aligned+merged flowcell BAM files and mark duplicates
-  call MarkDuplicates as sampleMarkDuplicates {
+  call MarkDuplicatesSpark as sampleMarkDuplicates {
     input:
       input_bam = sampleMergeBamAlignment.output_bam,
       output_bam_basename = base_file_name + ".aligned.duplicates_marked",
@@ -167,7 +169,7 @@ scatter (job in batchInfo){
       docker = GATKdocker
   }
 
-  call MarkDuplicates as refMarkDuplicates {
+  call MarkDuplicatesSpark as refMarkDuplicates {
     input:
       input_bam =refMergeBamAlignment.output_bam,
       output_bam_basename = ref_file_name + ".aligned.duplicates_marked",
@@ -175,33 +177,11 @@ scatter (job in batchInfo){
       docker = GATKdocker
   }
 
-    # Sort aggregated+deduped BAM file and fix tags
-  call SortAndFixTags as sampleSortAndFixTags {
-    input:
-      input_bam = sampleMarkDuplicates.output_bam,
-      output_bam_basename = base_file_name + ".aligned.duplicate_marked.sorted",
-      ref_dict = ref_dict,
-      ref_fasta = ref_fasta,
-      ref_fasta_index = ref_fasta_index,
-      docker = GATKdocker
-  }
-
-    # Sort aggregated+deduped BAM file and fix tags
-  call SortAndFixTags as refSortAndFixTags {
-    input:
-      input_bam = refMarkDuplicates.output_bam,
-      output_bam_basename = base_file_name + ".aligned.duplicate_marked.sorted",
-      ref_dict = ref_dict,
-      ref_fasta = ref_fasta,
-      ref_fasta_index = ref_fasta_index,
-      docker = GATKdocker
-  }
-
   # Generate the recalibration model by interval and apply it
   call ApplyBaseRecalibrator as sampleApplyBaseRecalibrator {
     input:
-      input_bam = sampleSortAndFixTags.output_bam,
-      input_bam_index = sampleSortAndFixTags.output_bai,
+      input_bam = sampleMarkDuplicates.output_bam,
+      input_bam_index = sampleMarkDuplicates.output_bai,
       base_file_name = base_file_name,
       intervals = SortBed.intervals,
       dbSNP_vcf = dbSNP_vcf,
@@ -217,8 +197,8 @@ scatter (job in batchInfo){
   # Generate the recalibration model by interval and apply it
   call ApplyBaseRecalibrator as refApplyBaseRecalibrator {
     input:
-      input_bam = refSortAndFixTags.output_bam,
-      input_bam_index = refSortAndFixTags.output_bai,
+      input_bam = refMarkDuplicates.output_bam,
+      input_bam_index = refMarkDuplicates.output_bai,
       base_file_name = ref_file_name,
       intervals = SortBed.intervals,
       dbSNP_vcf = dbSNP_vcf,
@@ -283,6 +263,8 @@ scatter (job in batchInfo){
       ref_fasta_index = ref_fasta_index,
       gnomad = gnomad,
       gnomad_idx = gnomad_index,
+      pon = pon,
+      pon_idx = pon_index,
       docker = GATKdocker
     }
 
@@ -313,7 +295,7 @@ scatter (job in batchInfo){
         referenceFasta = ref_fasta,
         referenceFastaFai = ref_fasta_index,
         bed_file = SortBed.sorted_bed,
-        docker = strelkadocker
+        modules = strelkamodule
     }
 
     # Annotate variants
@@ -407,6 +389,7 @@ task SortBed {
   runtime {
     memory: "8 GB"
     docker: docker
+    walltime: "30:00"
   }
 }
 
@@ -433,6 +416,7 @@ task SamToFastq {
   runtime {
     memory: "16 GB"
     docker: docker
+    walltime: "2:00:00"
   }
 }
 
@@ -468,90 +452,10 @@ task BwaMem {
     memory: "48 GB"
     cpu: 16
     docker: docker
+    walltime: "2:00:00"
   }
 }
 
-
-# Mark duplicate reads to avoid counting non-independent observations
-## For speed https://www.biorxiv.org/content/10.1101/348565v1.full.pdf
-##    gatk --java-options "-XX:+UseParallelGC -XX:ParallelGCThreads=4 -Dsamjdk.compression_level=5 -Xms4g" \
-
-task MarkDuplicates {
-  input {
-    File input_bam
-    String output_bam_basename
-    String metrics_filename
-    String docker
-  }
-
- # Task is assuming query-sorted input so that the Secondary and Supplementary reads get marked correctly.
- # This works because the output of BWA is query-grouped and therefore, so is the output of MergeBamAlignment.
- # While query-grouped isn't actually query-sorted, it's good enough for MarkDuplicates with ASSUME_SORT_ORDER="queryname"
-  command {
-    set -eo
-    gatk --java-options "-XX:+UseParallelGC -XX:ParallelGCThreads=4 -Dsamjdk.compression_level=5 -Xms4g" \
-      MarkDuplicates \
-      --INPUT ${input_bam} \
-      --OUTPUT ${output_bam_basename}.bam \
-      --METRICS_FILE ${metrics_filename} \
-      --VALIDATION_STRINGENCY SILENT \
-      --OPTICAL_DUPLICATE_PIXEL_DISTANCE 2500 \
-      --ASSUME_SORT_ORDER "queryname" \
-      --CREATE_MD5_FILE false \
-      --REMOVE_DUPLICATES false \
-      --REMOVE_SEQUENCING_DUPLICATES false
-  }
-  runtime {
-    docker: docker
-    cpu: 4
-    memory: "36 GB"
-  }
-  output {
-    File output_bam = "${output_bam_basename}.bam"
-    File duplicate_metrics = "${metrics_filename}"
-  }
-}
-
-# Sort BAM file by coordinate order and fix tag values for NM and UQ
-task SortAndFixTags {
-  input {
-    File input_bam
-    String output_bam_basename
-    File ref_dict
-    File ref_fasta
-    File ref_fasta_index
-    String docker
-  }
-
-  command {
-    set -eo pipefail
-
-    gatk --java-options "-Dsamjdk.compression_level=5 -Xms4g" \
-      SortSam \
-      --INPUT ${input_bam} \
-      --OUTPUT /dev/stdout \
-      --SORT_ORDER "coordinate" \
-      --CREATE_INDEX false \
-      --CREATE_MD5_FILE false \
-      | \
-    gatk --java-options "-Dsamjdk.compression_level=5 -Xms4g" \
-      SetNmMdAndUqTags \
-      --INPUT /dev/stdin \
-      --OUTPUT ${output_bam_basename}.bam \
-      --CREATE_INDEX true \
-      --CREATE_MD5_FILE true \
-      --REFERENCE_SEQUENCE ${ref_fasta}
-  }
-  runtime {
-    docker: docker
-    cpu: 4
-    memory: "16 GB"
-  }
-  output {
-    File output_bam = "${output_bam_basename}.bam"
-    File output_bai = "${output_bam_basename}.bai"
-  }
-}
 
 
 # Merge original input uBAM file with BWA-aligned BAM file
@@ -568,7 +472,7 @@ task MergeBamAlignment {
   command {
     set -eo pipefail
 
-    gatk --java-options "-Dsamjdk.compression_level=5 -XX:-UseGCOverheadLimit -Xmx12g" \
+    gatk --java-options "-Dsamjdk.compression_level=5 -XX:-UseGCOverheadLimit -Xms12g" \
       MergeBamAlignment \
       --VALIDATION_STRINGENCY SILENT \
       --EXPECTED_ORIENTATIONS FR \
@@ -597,6 +501,7 @@ task MergeBamAlignment {
     memory: "16 GB"
     cpu: 2
     docker: docker
+    walltime: "2:00:00"
   }
 }
 
@@ -651,8 +556,9 @@ task ApplyBaseRecalibrator {
   }
   runtime {
     memory: "36 GB"
-    cpu: 6
+    cpu: 2
     docker: docker
+    walltime: "6:00:00"
   }
 }
 
@@ -677,6 +583,7 @@ task bedToolsQC {
   }
   runtime {
     docker: docker
+    walltime: "2:00:00"
   }
 }
 
@@ -694,6 +601,8 @@ task Mutect2 {
     File ref_fasta_index
     File gnomad
     File gnomad_idx
+    File pon
+    File pon_idx
     String sampleID
     String referenceID
     String docker
@@ -703,7 +612,7 @@ task Mutect2 {
     set -eo pipefail
 
   # Just in case the bam header isn't the referenceID or sampleID
-    gatk --java-options "-Xms12g" \
+    gatk --java-options "-Xms30g" \
       AddOrReplaceReadGroups \
         -I=${input_ref_bam} \
         -O=reference.bam \
@@ -713,7 +622,7 @@ task Mutect2 {
         -PU=unknown 
 
 
-    gatk --java-options "-Xms12g" \
+    gatk --java-options "-Xms30g" \
       AddOrReplaceReadGroups \
         -I=${input_bam} \
         -O=tumor.bam \
@@ -728,7 +637,7 @@ task Mutect2 {
   
 
   ## Mutect with FFPE artifact bias filter
-    gatk --java-options "-Xms12g" \
+    gatk --java-options "-Xms30g" \
       Mutect2 \
         -R ${ref_fasta} \
         -I tumor.bam \
@@ -739,10 +648,11 @@ task Mutect2 {
         --intervals ${intervals} \
         --interval-padding 100  \
         --f1r2-tar-gz f1r2.tar.gz \
-        --germline-resource ${gnomad}
+        --germline-resource ${gnomad} \
+        --panel-of-normals ${pon}
 
   # This creates an output with raw data used to learn the orientation bias model
-    gatk --java-options "-Xms12g" \
+    gatk --java-options "-Xms30g" \
       LearnReadOrientationModel \
         -I f1r2.tar.gz \
         -O ${base_file_name}.read-orientation-model.tar.gz
@@ -757,6 +667,7 @@ task Mutect2 {
     memory: "36 GB"
     cpu: 4
     docker: docker
+    walltime: "12:00:00"
   }
 }
 
@@ -799,7 +710,8 @@ task FilterMutectCalls {
   runtime {
     docker: docker
     memory: "36 GB"
-    cpu: 4
+    cpu: 2
+    walltime: "2:00:00"
   }
 }
 
@@ -836,6 +748,7 @@ task annovar {
   }
   runtime {
     docker: docker
+    walltime: "2:00:00"
   }
 }
 
@@ -851,7 +764,7 @@ task StrelkaSomatic {
     File bed_file
     String base_file_name
     String ref_file_name
-    String docker
+    String modules 
   }
   command {
     set -eo pipefail
@@ -871,13 +784,8 @@ task StrelkaSomatic {
         --callRegions ${bed_file}.gz \
         --exome
 
-    tempDir/runWorkflow.py \
-        -m local \
-        -j 36 \
-        -g 42
-        ## j is the number of cores available
-        ## g is the amount of memory available
-
+    sed -i s/"isEmail = isLocalSmtp()"/"isEmail = False"/g tempDir/runWorkflow.py
+    tempDir/runWorkflow.py -m local 
 
     # Concatenate the SNVs and indels
     bcftools concat -a \
@@ -903,8 +811,9 @@ task StrelkaSomatic {
     }
     runtime {
       memory: "48 GB"
-      cpu: 36
-      docker: docker
+      cpu: 12
+      modules: modules
+      walltime: "6:00:00"
     }
 }
 
@@ -921,7 +830,7 @@ task CollectHsMetrics {
   command {
     set -eo pipefail
 
-    gatk --java-options "-Xmx4g" \
+    gatk --java-options "-Xms2g" \
       CollectHsMetrics \
       --INPUT=${input_bam} \
       --OUTPUT=${base_file_name}.picard.metrics.txt \
@@ -938,6 +847,7 @@ task CollectHsMetrics {
   runtime {
     memory: "4 GB"
     docker: docker
+    walltime: "2:00:00"
   }
 }
 
@@ -964,5 +874,39 @@ task consensusFiltering {
   runtime {
     memory: "8 GB"
     modules: modules
+    walltime: "30:00"
+  }
+}
+
+
+task MarkDuplicatesSpark {
+  input {
+    File input_bam
+    String output_bam_basename
+    String metrics_filename
+    String docker
+  }
+  # LAter use: --verbosity WARNING
+ # Task is assuming query-sorted input so that the Secondary and Supplementary reads get marked correctly.
+ # This works because the output of BWA is query-grouped and therefore, so is the output of MergeBamAlignment.
+ # While query-grouped isn't actually query-sorted, it's good enough for MarkDuplicates with ASSUME_SORT_ORDER="queryname"
+  command {
+    gatk --java-options "-XX:+UseParallelGC -XX:ParallelGCThreads=4 -Dsamjdk.compression_level=5 -Xms32g" \
+      MarkDuplicatesSpark \
+      --input ${input_bam} \
+      --output ${output_bam_basename}.bam \
+      --metrics-file ${metrics_filename} \
+      --optical-duplicate-pixel-distance 2500 
+  }
+  runtime {
+    docker: docker
+    memory: "48 GB"
+    cpu: 4
+    walltime: "6:00:00"
+  }
+  output {
+    File output_bam = "${output_bam_basename}.bam"
+    File output_bai = "${output_bam_basename}.bam.bai"
+    File duplicate_metrics = "${metrics_filename}"
   }
 }
