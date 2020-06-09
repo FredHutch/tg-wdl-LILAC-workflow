@@ -124,7 +124,7 @@ See all thejobs this server has run in the past (x) days
 ```{r}
 afew <- 2
 jobs <- cromwellJobs(days = afew) %>% arrange(desc(start))
-jobs <- cromwellJobs(1)
+jobs <- cromwellJobs()
 ```
 
 Isolate one workflow
@@ -149,7 +149,9 @@ Monitor Running Workflows
 ```{r}
 w <- cromwellWorkflow(thisOne); w$status
 c <- cromwellCall(thisOne); c %>% group_by(executionStatus, callName) %>% summarize(status = n())
+c %>% group_by(executionStatus, callName) %>% filter(executionStatus != "Done") %>% summarize(status = n())
 ca <- cromwellCache(thisOne); ca %>% group_by(callCaching.hit, callName) %>% summarize(hits = n())
+ca %>% group_by(callCaching.hit) %>% summarize(hits = n())
 f <- cromwellFailures(thisOne); f
 ```
 
@@ -172,154 +174,129 @@ out <- cromwellOutputs(thisOne)
 ```
 
 
-# Third Cohort vs CEPH
-## Set up Manifest
-### Pull S3 Inventory and Annotate
+
+# Output Processing
+## Join manifest and outputs
 ```{r}
-bucket <- "fh-pi-berger-a"; DAG  <- "bergera"
-tags <- listS3Objects(bucket = bucket)
-annotations <- tgrAnnotate(DAG = DAG, harmonizedOnly = FALSE)
-monsterMash <- dplyr::left_join(tags, annotations) %>% dropWhen()
+out <- cromwellOutputs(thisOne)
+batchFile <- manifest
+batchFile <- s3read_using(
+              FUN = read.table, header = T, sep = "\t",
+              object = thisManifest,
+              bucket = "fh-pi-paguirigan-a-genomicsrepo")
+batchFile$shardIndex <- as.character(seq(from = 0, to = nrow(batchFile)-1, by = 1))
+
+annotatedOutputs <- inner_join(batchFile, out, by = c("shardIndex"))
 ```
 
-### Filter Inventory for Workflow Input Data
-In this workflow, the input data must be unmapped bams with quality control checks.  Also, to run the workflow you'll need the bed file for the dataset up in S3.  
+## Prep CopyNTag manifest
+Column names required for copyNTag are: molecular_id, sourceFile, stage, workflowOutputType, workflowId, workflowName, destinationPrefix, destinationBucket
 ```{r}
-unique(monsterMash$workflowName)
-unmappedBams <- monsterMash %>% 
-  filter(workflowName %in% c("AlignedToUnMappedBam", "PairedFastqsToUnmappedBam") & 
-           workflowOutputType == "unmappedbam" & 
-           dataset_qc_cohort == "dfci-cohort3") %>% dropWhen(unique = T) # genomics_type == "dnaseq" &
-unique(unmappedBams$dataset_qc_cohort)
+copyNTag <- annotatedOutputs %>%
+  select(molecular_id, workflowOutputType, pathToOutput, workflow_id, workflowName, ref_molecular_id) %>%
+  rename("workflowId" = "workflow_id", "sourceFile" = "pathToOutput")
+head(copyNTag)
 
-unmappedBams %>% group_by(workflowOutputType) %>%summarize(n())
-pairedSamples <- unmappedBams %>% 
-  select(molecular_id, omics_sample_name, key, 
-         tissue_type, biospecimen_id) %>% 
-  filter(molecular_id != "referenceDataSet")
+copyNTag <- copyNTag %>% 
+  mutate(destinationPrefix = 
+           gsub("/fh/scratch/delete90/paguirigan_a/cromwell-executions/",
+                "tg/LILAC-FARBER/TGR-Analyses/", copyNTag$sourceFile))
 
+copyNTag$molecular_id <- as.character(copyNTag$molecular_id)
+copyNTag <- copyNTag %>% 
+  mutate(destinationPrefix = str_replace(
+    destinationPrefix, 
+    "call-[^/]*/shard-.*/execution", 
+    molecular_id)) # Now works for cacheCopy files but be careful here. 
+head(copyNTag$destinationPrefix)
+tail(copyNTag$destinationPrefix)
+
+copyNTag$destinationBucket <- "fh-pi-berger-a"
+copyNTag$stage <- "processed"
+copyNTag[10,]
+
+
+referenceOutputs <-  c("analysisReadyRefIndex" , "analysisReadyRefBam", "refPicardQCpertarget" , "refPicardQC" ,"refBedQC")
+refOutputData <- copyNTag %>% filter(workflowOutputType %in% referenceOutputs) %>% 
+  select(-molecular_id) %>% rename("molecular_id" = "ref_molecular_id")
+head(refOutputData)
+tail(refOutputData)
+
+sampleOutputData <- copyNTag %>% filter(!workflowOutputType %in% referenceOutputs) %>% select(-ref_molecular_id)
+merged <- rbind(sampleOutputData, refOutputData)
 ```
 
-### Match Sample and Reference Datasets
+## Create Manifest
 ```{r}
-samples <- pairedSamples %>% filter(tissue_type != "cellline") %>% 
-  select(key, omics_sample_name,  molecular_id) %>%
-  rename("sampleBamLocation" = "key", "sampleName" = "omics_sample_name")
-
-references <- pairedSamples %>% filter(tissue_type == "cellline") %>% 
-  select(key, omics_sample_name,  molecular_id) %>% 
-  rename("refBamLocation" = "key", "referenceName" = "omics_sample_name", "ref_molecular_id" = "molecular_id")
-
-matched <- cbind(samples, references) # Check here that all is as it should be.  
-matched$sampleBamLocation <- paste0("s3://fh-pi-berger-a/", matched$sampleBamLocation)
-matched$refBamLocation <- paste0("s3://fh-pi-berger-a/", matched$refBamLocation)
-#matched$bedLocation <- "s3://fh-pi-paguirigan-a-genomicsrepo/repoReferenceData/bedFiles/dfci-v5Oncopanel3.1/Exome_Plus_POPv3.1_SV_ONLY_3191451_Covered_hg19-tabbed.bed"
-
+copyManifest <- merged %>% 
+  select(sourceFile, molecular_id, stage, workflowId, workflowName, workflowOutputType, destinationPrefix, destinationBucket)
 ```
 
-### Prefilter manifest if needed
-```{r}
-manifest <- matched
-manifest <- manifest[1,]
-```
 
-### Name and Ship Batch File
+## Ship Batch File
 ```{r}
-repoName <- "FredHutch/tg-wdl-LILAC-workflow"
-
-batchFileName <- paste0("cromwell-manifests/", repoName, "/", format(Sys.Date(), "%Y-%m-%d-"), "LILAC-cohort3-vsCEPH-1pair.tsv")
+repoName <- "FredHutch/tg-wdl-copyNTag"
+batchFileName <- paste0("cromwell-manifests/",repoName, "/", format(Sys.Date(), "%Y-%m-%d-"), "75-LILAC-pairs-fix.tsv")
 paste0("s3://fh-pi-paguirigan-a-genomicsrepo/", batchFileName)
-s3write_using(manifest,
+s3write_using(copyManifest,
               FUN = write.table, quote = F, row.names = F, sep = "\t",
               object = batchFileName,
               bucket = "fh-pi-paguirigan-a-genomicsrepo")
-
-```
-## Cromwell Setup
-### Server setup
-```{r}
-cromwellCreate(FredHutchId = "apaguiri", port = "8000",
-        pathToServerLogs = " ~/cromwell/partlyCloudyConfig/server-logs/partly-v49-%A.txt",
-        pathToServerScript = "~/cromwell/partlyCloudyConfig/partlyCloudy.sh",
-        pathToParams = "~/cromwell/partlyCloudyConfig/cromwellParams.sh")
-
-setCromwellURL(FredHutchId = "apaguiri", jobId = "47006887", port = "8000")
-
-Sys.setenv("CROMWELLURL" = "http://gizmoj7:8000")
-Sys.getenv("CROMWELLURL")
+thisManifest <- "s3://fh-pi-paguirigan-a-genomicsrepo/cromwell-manifests/FredHutch/tg-wdl-copyNTag/2020-05-31-75-LILAC-pairs-fix.tsv"
 ```
 
-
-### Submit Job to Cromwell
-
-Note: setwd to location of workflow files
-
-Validate workflow
+## Validate and Submit Job
 ```{r}
-setwd("~/OneDrive - Fred Hutchinson Cancer Research Center/Analysis/Berger-LILAC/ProductionWork/tg-wdl-LILAC-workflow/GATK4.1.4.0")
-valid <- womtoolValidate(WDL = "duelingBanjos_GATK4.1.4.0.wdl"); valid[["errors"]]; valid$isRunnableWorkflow
-```
+Sys.setenv("CROMWELLURL" = "http://gizmog3:8000")
 
-```{r}
+setwd("~/OneDrive - Fred Hutchinson Cancer Research Center/Analysis/Berger-LILAC/ProductionWork/tg-wdl-LILAC-workflow/GATK4.1.4.0/post-copyTag")
+womtoolValidate("copyNtag.wdl")
 
-thisJob <- cromwellSubmitBatch(WDL = "duelingBanjos_GATK4.1.4.0.wdl",
-                    Params = "duel_parameters_hg19-homosapiens.json",
-                    Batch = "duel_batch_hg19-homosapiens-cohort3-CEPH.json",
-                    Options = "workflow-options.json",
-                    Labels = data.frame("workflowType" = "one-3vsCEPH"))
+thisJob <- cromwellSubmitBatch(
+  WDL = "copyNtag.wdl",
+  Params = "copyNtag-inputs.json",
+  Options = "workflow-options.json",
+  Labels = data.frame("workflowType" = "LILAC"))
+
 thisOne <- thisJob$id; thisOne
 ```
 
-## Monitor Jobs
-See all thejobs this server has run in the past (x) days
 ```{r}
-afew <- 2
-jobs <- cromwellJobs(days = afew) %>% arrange(desc(start))
-jobs <- cromwellJobs(1)
+thisManifest <- "s3://fh-pi-paguirigan-a-genomicsrepo/cromwell-manifests/FredHutch/tg-wdl-copyNTag/2020-05-31-75-LILAC-pairs.tsv"
+thisOne <- "87cffbd3-fe9d-4bc7-afd5-aed842a1ed50"
+thisOne <- "aea721c9-8989-449f-8885-50f79b176723"
+thisOne <- "f25fc2a9-4afe-417a-8c33-00c8818d7af4" # Fix tags
+thisOne <- "f1d1ec2f-730b-439f-b2b7-1ac928470c89" # path fixed.  sheesh
+thisOne <- "663cbe6b-4d06-430b-972f-924dbc753c07" #OMFG
+thisOne <- "090e60d1-ff78-4176-bbe4-da8247ba23c9" # resubmit to fnish
+thisOne <- "ea536d79-6c81-4493-b416-7d033abdb0eb"
 ```
 
-Isolate one workflow
-```{r}
 
-thisOne <- jobs$workflow_id[1]
-```
-
-Historical job tracking
-```{r}
-thisManifest <- "s3://fh-pi-paguirigan-a-genomicsrepo/cromwell-manifests/FredHutch/tg-wdl-LILAC-workflow/2020-05-26-LILAC-cohort3-vsCEPH.tsv"
-thisOne <- "d1c0cc10-8437-458f-bdb7-782b7c00c588"
-thisOne <- "1fd3503a-9aea-4843-9e2e-c2a8e81777b0" # second for call caching b/c of all CEPH dna problems
-thisOne <- "f11c97af-05e8-428b-b125-8ff00392d2d0" # third, trying for more call caching /c of timeouts
-thisOne <- "148f7ce9-821e-4f70-b0d0-e00099aab3c4" # just one pair, to get all the reference data done first, then resubmit the full set after this ends. 
-thisOne <- "ae36c22b-b63a-4e70-8913-1330ca06fcba" # REsubmit after it got overwhelmed
-thisOne <-  "c10e3dff-947a-4f49-9bd7-714dd726d363" # WTH
-thisOne <- "f047dc43-3ae2-4cae-971a-13703a0f1f88" # after all clear
-thisOne <- "f6a3bdb5-c316-40e0-b612-927a48143a1e" # now for the whole cohort3 after reference is done. 
-thisOne <- "65766b08-241d-4f39-9e6e-619a2fb74a7e" # some one sample must've failed
-```
-
-Monitor Running Workflows
+## Workflow level metadata
 ```{r}
 w <- cromwellWorkflow(thisOne); w$status
+WTF <- cromwellGlob(thisOne); WTF[["failures"]]
 c <- cromwellCall(thisOne); c %>% group_by(executionStatus, callName) %>% summarize(status = n())
 ca <- cromwellCache(thisOne); ca %>% group_by(callCaching.hit, callName) %>% summarize(hits = n())
 f <- cromwellFailures(thisOne); f
+cromwellAbort(thisOne)
 ```
 
-Find out more about call caching and calls
+
+## Confirm
 ```{r}
-butWhy <- left_join(cromwellCall(thisOne) %>% mutate_all(as.character), 
-                    cromwellCache(thisOne) %>% mutate_all(as.character)); butWhy %>% group_by(callName, executionStatus, callCaching.hit) %>% summarize(hits = n()) %>% arrange(desc(executionStatus))
+Bucket <- "fh-pi-berger-a"
+Dag <- "bergera"
+tags <- listS3Objects(bucket = Bucket)
+annotations <- tgrAnnotate(DAG = Dag)
+monsterMash <- left_join(annotations, tags)
+
+unique(monsterMash$workflowName)
+monsterMash %>% filter(workflowName == "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants") %>% distinct(workflowID)
+monsterMash %>% filter(workflowName == "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants" & 
+                         workflowID == "e4beab94-a76b-49a5-b486-437284ea8dae") %>% distinct(workflowOutputType)
+
 ```
 
-Stop a workflow or find more about it
-```{r}
-abort <- cromwellAbort(thisOne)
-WTF <- cromwellGlob(thisOne); WTF$failures
-cromwellTiming(thisOne)
-```
 
-## Workflow Outputs
-```{r}
-out <- cromwellOutputs(thisOne) 
-```
