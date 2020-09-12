@@ -1,0 +1,4 @@
+{
+  "germlineVariantCalling.batchFile": "s3://fh-pi-paguirigan-a-genomicsrepo/cromwell-manifests/FredHutch/tg-wdl-HALO/2020-05-17-HALOValidation.tsv",
+  "germlineVariantCalling.bedLocation": "s3://fh-ctr-public-reference-data/reagent_specific_data/sequencing_panel_bed/TruSight-One-Illumina/TruSight_One_v1.1-liftover-hg38.bed"
+}
