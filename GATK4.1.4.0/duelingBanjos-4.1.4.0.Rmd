@@ -72,13 +72,14 @@ matched$refBamLocation <- paste0("s3://fh-pi-berger-a/", matched$refBamLocation)
 ```{r}
 manifest <- matched
 manifest <- manifest[1,]
+manifest <- matched %>% filter(molecular_id %in% c("M00001494", "M00001491", "M00001221"))
 ```
 
 ### Name and Ship Batch File
 ```{r}
 repoName <- "FredHutch/tg-wdl-LILAC-workflow"
 
-batchFileName <- paste0("cromwell-manifests/", repoName, "/", format(Sys.Date(), "%Y-%m-%d-"), "LILAC-75-pairs.tsv")
+batchFileName <- paste0("cromwell-manifests/", repoName, "/", format(Sys.Date(), "%Y-%m-%d-"), "LILAC-EGFR-mantaTestTrio.tsv")
 paste0("s3://fh-pi-paguirigan-a-genomicsrepo/", batchFileName)
 s3write_using(manifest,
               FUN = write.table, quote = F, row.names = F, sep = "\t",
@@ -96,7 +97,7 @@ cromwellCreate(FredHutchId = "apaguiri", port = "8000",
 
 setCromwellURL(FredHutchId = "apaguiri", jobId = "47006887", port = "8000")
 
-Sys.setenv("CROMWELLURL" = "http://gizmoj7:8000")
+Sys.setenv("CROMWELLURL" = "http://gizmo....")
 Sys.getenv("CROMWELLURL")
 ```
 
@@ -118,6 +119,17 @@ thisJob <- cromwellSubmitBatch(WDL = "duelingBanjos_GATK4.1.4.0.wdl",
                     Labels = data.frame("workflowType" = "all 75 pairs"))
 thisOne <- thisJob$id; thisOne
 ```
+
+```{r}
+setwd("~/github/workflows/tg-wdl-LILAC-workflow/GATK4.1.4.0/manta")
+thisJob <- cromwellSubmitBatch(WDL = "pileon_GATK4.1.4.0_manta.wdl",
+                    Params = "pileon_parameters_hg19-homosapiens.json",
+                    Batch = "pileon_batch.json"   ,
+                    Options = "continueWhile-callcachingOn.json",
+                    Labels = data.frame("workflowType" = "testingEGFRindel-Trio"))
+thisOne <- thisJob$id; thisOne
+```
+
 
 ## Monitor Jobs
 See all thejobs this server has run in the past (x) days
@@ -143,6 +155,8 @@ thisOne <- "c8249745-6318-4f21-b463-d5e160d8dd52" # The copy outputs job
 
 thisManifest <-  "cromwell-manifests/FredHutch/tg-wdl-LILAC-workflow/2020-05-31-LILAC-75-pairs.tsv"
 thisOne <- "e4beab94-a76b-49a5-b486-437284ea8dae" # first attempt at all 75 pairs
+
+thisOne <- "ae66870f-a454-4992-9e9b-3a89d5bac232" # Manta trio test
 ```
 
 Monitor Running Workflows
@@ -170,7 +184,7 @@ cromwellTiming(thisOne)
 
 ## Workflow Outputs
 ```{r}
-out <- cromwellOutputs(thisOne) 
+out <- cromwellOutputs("") 
 ```
 
 

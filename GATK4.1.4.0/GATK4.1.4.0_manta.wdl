@@ -49,19 +49,17 @@ workflow HybridCap_BWA_Mutect2_Strelka_Manta_AnnotatedVariants {
     # consensus formatting script
     String githubRepoURL
     String githubTag
-  }
+    }
     # Docker containers this workflow has been designed for
     String GATKdocker = "broadinstitute/gatk:4.1.4.0"
     String bwadocker = "fredhutch/bwa:0.7.17"
     String bedtoolsdocker = "fredhutch/bedtools:2.28.0" 
     String bcftoolsdocker = "fredhutch/bcftools:1.9"
     String perldocker = "perl:5.28.0"
-    #String strelkamodule = "strelka/2.9.9-foss-2018b SAMtools/1.10-GCCcore-8.3.0 BCFtools/1.9-GCC-8.3.0" 
     String strelkaDocker = "fredhutch/strelka:2.9.10-samtools"
     String mantaDocker = "fredhutch/manta:1.6.0"
-    #String RModule =  "R/3.6.2-foss-2019b-fh1"
     String RDocker = "vortexing/r-fetch-and-run:tidyverse.4.0.3"
-
+    
     Array[Object] batchInfo = read_objects(batchFile)
 
   # Prepare bed file and check sorting
@@ -283,23 +281,7 @@ scatter (job in batchInfo){
       ref_file_name = ref_file_name,
       taskDocker = GATKdocker
   }
-
-  # Use Strelka somatic variant caller
-  call StrelkaSomatic {
-    input:
-        tumorBam = sampleApplyBaseRecalibrator.recalibrated_bam,
-        tumorBamIndex = sampleApplyBaseRecalibrator.recalibrated_bai,
-        base_file_name = base_file_name,
-        normalBam = refApplyBaseRecalibrator.recalibrated_bam,
-        normalBamIndex = refApplyBaseRecalibrator.recalibrated_bai,
-        ref_file_name = ref_file_name,
-        referenceFasta = ref_fasta,
-        referenceFastaFai = ref_fasta_index,
-        bed_file = SortBed.sorted_bed,
-        taskDocker = strelkaDocker
-    }
-
-      # Use Manta somatic indel caller
+ # Use Manta somatic indel caller
   call MantaSomatic {
     input:
         tumorBam = sampleApplyBaseRecalibrator.recalibrated_bam,
@@ -313,6 +295,23 @@ scatter (job in batchInfo){
         bed_file = SortBed.sorted_bed,
         taskDocker = mantaDocker
     }
+  # Use Strelka somatic variant caller
+  call StrelkaSomatic {
+    input:
+        tumorBam = sampleApplyBaseRecalibrator.recalibrated_bam,
+        tumorBamIndex = sampleApplyBaseRecalibrator.recalibrated_bai,
+        base_file_name = base_file_name,
+        normalBam = refApplyBaseRecalibrator.recalibrated_bam,
+        normalBamIndex = refApplyBaseRecalibrator.recalibrated_bai,
+        mantaCandidates = MantaSomatic.candidateSmallIndels,
+        mantaCandidatesIndx = MantaSomatic.candidateSmallIndelsIndx,
+        ref_file_name = ref_file_name,
+        referenceFasta = ref_fasta,
+        referenceFastaFai = ref_fasta_index,
+        bed_file = SortBed.sorted_bed,
+        taskDocker = strelkaDocker
+    }
+
 
     # Annotate variants
     call annovar as mutectAnnovar {
@@ -349,8 +348,8 @@ scatter (job in batchInfo){
         taskDocker = RDocker
     }
 
-  # End scatter 
-  }
+} # end sample scatter
+
   # Outputs that will be retained when execution is complete
   output {
     Array[File] analysisReadyBam = sampleApplyBaseRecalibrator.recalibrated_bam 
@@ -376,7 +375,6 @@ scatter (job in batchInfo){
     Array[File] diploidSV = MantaSomatic.diploidSV
     Array[File] somaticSV = MantaSomatic.somaticSV
     Array[File] candidateSV = MantaSomatic.candidateSV
-    Array[File] candidateSmallIndels = MantaSomatic.candidateSmallIndels
   }
 # End workflow
 }
@@ -393,14 +391,14 @@ task SortBed {
     set -eo pipefail
 
     echo "Sort bed file"
-    sort -k1,1V -k2,2n -k3,3n ${unsorted_bed} > sorted.bed
+    sort -k1,1V -k2,2n -k3,3n ~{unsorted_bed} > sorted.bed
 
     echo "Transform bed file to intervals list with Picard----------------------------------------"
     gatk --java-options "-Xms4g" \
       BedToIntervalList \
       -I=sorted.bed \
       -O=sorted.interval_list \
-      -SD=${ref_dict}
+      -SD=~{ref_dict}
   }
   output {
     File intervals = "sorted.interval_list"
@@ -426,13 +424,13 @@ task SamToFastq {
 
     gatk --java-options "-Dsamjdk.compression_level=5 -Xms8g" \
       SamToFastq \
-      --INPUT=${input_bam} \
-      --FASTQ=${base_file_name}.fastq.gz \
+      --INPUT=~{input_bam} \
+      --FASTQ=~{base_file_name}.fastq.gz \
       --INTERLEAVE=true \
       --INCLUDE_NON_PF_READS=true 
   }
   output {
-    File output_fastq = "${base_file_name}.fastq.gz"
+    File output_fastq = "~{base_file_name}.fastq.gz"
   }
   runtime {
     memory: "16 GB"
@@ -464,11 +462,11 @@ task BwaMem {
 
     bwa mem \
       -p -v 3 -t 16 -M \
-      ${ref_fasta} ${input_fastq} > ${base_file_name}.sam 
-    samtools view -1bS -@ 15 -o ${base_file_name}.aligned.bam ${base_file_name}.sam
+      ~{ref_fasta} ~{input_fastq} > ~{base_file_name}.sam 
+    samtools view -1bS -@ 15 -o ~{base_file_name}.aligned.bam ~{base_file_name}.sam
   }
   output {
-    File output_bam = "${base_file_name}.aligned.bam"
+    File output_bam = "~{base_file_name}.aligned.bam"
   }
   runtime {
     memory: "48 GB"
@@ -499,10 +497,10 @@ task MergeBamAlignment {
       --VALIDATION_STRINGENCY SILENT \
       --EXPECTED_ORIENTATIONS FR \
       --ATTRIBUTES_TO_RETAIN X0 \
-      --ALIGNED_BAM ${aligned_bam} \
-      --UNMAPPED_BAM ${unmapped_bam} \
-      --OUTPUT ${base_file_name}.merged.bam \
-      --REFERENCE_SEQUENCE ${ref_fasta} \
+      --ALIGNED_BAM ~{aligned_bam} \
+      --UNMAPPED_BAM ~{unmapped_bam} \
+      --OUTPUT ~{base_file_name}.merged.bam \
+      --REFERENCE_SEQUENCE ~{ref_fasta} \
       --PAIRED_RUN true \
       --SORT_ORDER queryname \
       --IS_BISULFITE_SEQUENCE false \
@@ -517,7 +515,7 @@ task MergeBamAlignment {
       --CREATE_INDEX false
   }
   output {
-    File output_bam = "${base_file_name}.merged.bam"
+    File output_bam = "~{base_file_name}.merged.bam"
   }
   runtime {
     memory: "16 GB"
@@ -546,35 +544,35 @@ task ApplyBaseRecalibrator {
   command {
   set -eo pipefail
 
-  samtools index ${input_bam}
+  samtools index ~{input_bam}
 
   gatk --java-options "-Xms8g" \
       BaseRecalibrator \
-      -R ${ref_fasta} \
-      -I ${input_bam} \
-      -O ${base_file_name}.recal_data.csv \
-      --known-sites ${dbSNP_vcf} \
-      --known-sites ${sep=" --known-sites " known_indels_sites_VCFs} \
-      --intervals ${intervals} \
+      -R ~{ref_fasta} \
+      -I ~{input_bam} \
+      -O ~{base_file_name}.recal_data.csv \
+      --known-sites ~{dbSNP_vcf} \
+      --known-sites ~{sep=" --known-sites " known_indels_sites_VCFs} \
+      --intervals ~{intervals} \
       --interval-padding 100 
 
   gatk --java-options "-Xms8g" \
       ApplyBQSR \
-      -bqsr ${base_file_name}.recal_data.csv \
-      -I ${input_bam} \
-      -O ${base_file_name}.recal.bam \
-      -R ${ref_fasta} \
-      --intervals ${intervals} \
+      -bqsr ~{base_file_name}.recal_data.csv \
+      -I ~{input_bam} \
+      -O ~{base_file_name}.recal.bam \
+      -R ~{ref_fasta} \
+      --intervals ~{intervals} \
       --interval-padding 100 
 
   #finds the current sort order of this bam file
-  samtools view -H ${base_file_name}.recal.bam | grep @SQ | sed 's/@SQ\tSN:\|LN://g' > ${base_file_name}.sortOrder.txt
+  samtools view -H ~{base_file_name}.recal.bam | grep @SQ | sed 's/@SQ\tSN:\|LN://g' > ~{base_file_name}.sortOrder.txt
 
   }
   output {
-    File recalibrated_bam = "${base_file_name}.recal.bam"
-    File recalibrated_bai = "${base_file_name}.recal.bai"
-    File sortOrder = "${base_file_name}.sortOrder.txt"
+    File recalibrated_bam = "~{base_file_name}.recal.bam"
+    File recalibrated_bai = "~{base_file_name}.recal.bai"
+    File sortOrder = "~{base_file_name}.sortOrder.txt"
   }
   runtime {
     memory: "36 GB"
@@ -596,12 +594,12 @@ task bedToolsQC {
   command {
   set -eo pipefail
 
-  bedtools sort -g ${genome_sort_order} -i ${bed_file} > correctly.sorted.bed
-  bedtools coverage -mean -sorted -g ${genome_sort_order} -a correctly.sorted.bed \
-      -b ${input_bam} > ${base_file_name}.bedtoolsQCMean.txt
+  bedtools sort -g ~{genome_sort_order} -i ~{bed_file} > correctly.sorted.bed
+  bedtools coverage -mean -sorted -g ~{genome_sort_order} -a correctly.sorted.bed \
+      -b ~{input_bam} > ~{base_file_name}.bedtoolsQCMean.txt
   }
   output {
-    File meanQC = "${base_file_name}.bedtoolsQCMean.txt"
+    File meanQC = "~{base_file_name}.bedtoolsQCMean.txt"
   }
   runtime {
     docker: taskDocker
@@ -636,9 +634,9 @@ task Mutect2 {
   # Just in case the bam header isn't the referenceID or sampleID
     gatk --java-options "-Xms30g" \
       AddOrReplaceReadGroups \
-        -I=${input_ref_bam} \
+        -I=~{input_ref_bam} \
         -O=reference.bam \
-        -SM=${referenceID} \
+        -SM=~{referenceID} \
         -LB=unknown \
         -PL=illumina \
         -PU=unknown 
@@ -646,9 +644,9 @@ task Mutect2 {
 
     gatk --java-options "-Xms30g" \
       AddOrReplaceReadGroups \
-        -I=${input_bam} \
+        -I=~{input_bam} \
         -O=tumor.bam \
-        -SM=${sampleID} \
+        -SM=~{sampleID} \
         -LB=unknown \
         -PL=illumina \
         -PU=unknown 
@@ -661,29 +659,29 @@ task Mutect2 {
   ## Mutect with FFPE artifact bias filter
     gatk --java-options "-Xms30g" \
       Mutect2 \
-        -R ${ref_fasta} \
+        -R ~{ref_fasta} \
         -I tumor.bam \
         -I reference.bam \
-        -normal ${referenceID} \
-        -tumor ${sampleID} \
-        -O ${base_file_name}_${ref_file_name}.mutect2.unfiltered.vcf.gz \
-        --intervals ${intervals} \
+        -normal ~{referenceID} \
+        -tumor ~{sampleID} \
+        -O ~{base_file_name}_~{ref_file_name}.mutect2.unfiltered.vcf.gz \
+        --intervals ~{intervals} \
         --interval-padding 100  \
         --f1r2-tar-gz f1r2.tar.gz \
-        --germline-resource ${gnomad} \
-        --panel-of-normals ${pon}
+        --germline-resource ~{gnomad} \
+        --panel-of-normals ~{pon}
 
   # This creates an output with raw data used to learn the orientation bias model
     gatk --java-options "-Xms30g" \
       LearnReadOrientationModel \
         -I f1r2.tar.gz \
-        -O ${base_file_name}.read-orientation-model.tar.gz
+        -O ~{base_file_name}.read-orientation-model.tar.gz
     }
   output {
-    File output_vcf = "${base_file_name}_${ref_file_name}.mutect2.unfiltered.vcf.gz"
-    File output_vcf_index = "${base_file_name}_${ref_file_name}.mutect2.unfiltered.vcf.gz.tbi"
-    File artifact_prior_table = "${base_file_name}.read-orientation-model.tar.gz"
-    File stats = "${base_file_name}_${ref_file_name}.mutect2.unfiltered.vcf.gz.stats"
+    File output_vcf = "~{base_file_name}_~{ref_file_name}.mutect2.unfiltered.vcf.gz"
+    File output_vcf_index = "~{base_file_name}_~{ref_file_name}.mutect2.unfiltered.vcf.gz.tbi"
+    File artifact_prior_table = "~{base_file_name}.read-orientation-model.tar.gz"
+    File stats = "~{base_file_name}_~{ref_file_name}.mutect2.unfiltered.vcf.gz.stats"
   }
   runtime {
     memory: "36 GB"
@@ -716,19 +714,19 @@ task FilterMutectCalls {
   # Finally, pass the learned read orientation model to FilterMutectCallswith the -ob-priors argument:
     gatk --java-options "-Xms12g" \
       FilterMutectCalls \
-        -V ${unfiltered_vcf} \
-        --ob-priors ${artifact_priors_tar_gz} \
-        -O ${base_file_name}_${ref_file_name}.filtered.mutect2.vcf.gz \
-        -R ${ref_fasta} \
+        -V ~{unfiltered_vcf} \
+        --ob-priors ~{artifact_priors_tar_gz} \
+        -O ~{base_file_name}_~{ref_file_name}.filtered.mutect2.vcf.gz \
+        -R ~{ref_fasta} \
         ~{"--contamination-table " + contamination_table} \
         ~{"--ob-priors " + artifact_priors_tar_gz} \
         ~{"-stats " + mutect_stats} \
-        --filtering-stats ${base_file_name}.filtering.stats 
+        --filtering-stats ~{base_file_name}.filtering.stats 
   }
   output {
-    File filter_stats = "${base_file_name}.filtering.stats"
-    File filtered_vcf = "${base_file_name}_${ref_file_name}.filtered.mutect2.vcf.gz"
-    File filtered_vcf_index = "${base_file_name}_${ref_file_name}.filtered.mutect2.vcf.gz.tbi"
+    File filter_stats = "~{base_file_name}.filtering.stats"
+    File filtered_vcf = "~{base_file_name}_~{ref_file_name}.filtered.mutect2.vcf.gz"
+    File filtered_vcf_index = "~{base_file_name}_~{ref_file_name}.filtered.mutect2.vcf.gz.tbi"
   }
   runtime {
     docker: taskDocker
@@ -755,19 +753,19 @@ task annovar {
   command {
   set -eo pipefail
 
-  tar -xzvf ${annovarTAR}
+  tar -xzvf ~{annovarTAR}
 
-  perl annovar/table_annovar.pl ${input_vcf} annovar/humandb/ \
-    -buildver ${ref_name} \
-    -outfile ${base_vcf_name} \
+  perl annovar/table_annovar.pl ~{input_vcf} annovar/humandb/ \
+    -buildver ~{ref_name} \
+    -outfile ~{base_vcf_name} \
     -remove \
-    -protocol ${annovar_protocols} \
-    -operation ${annovar_operation} \
+    -protocol ~{annovar_protocols} \
+    -operation ~{annovar_operation} \
     -nastring . -vcfinput
   }
   output {
-    File output_annotated_vcf = "${base_vcf_name}.${ref_name}_multianno.vcf"
-    File output_annotated_table = "${base_vcf_name}.${ref_name}_multianno.txt"
+    File output_annotated_vcf = "~{base_vcf_name}.~{ref_name}_multianno.vcf"
+    File output_annotated_table = "~{base_vcf_name}.~{ref_name}_multianno.txt"
   }
   runtime {
     docker: taskDocker
@@ -784,6 +782,8 @@ task StrelkaSomatic {
     File normalBamIndex
     File tumorBam
     File tumorBamIndex
+    File mantaCandidates
+    File mantaCandidatesIndx
     File referenceFasta
     File referenceFastaFai
     File bed_file
@@ -796,17 +796,18 @@ task StrelkaSomatic {
     mkdir tempDir
 
     # zip and index the bed file for Strelka
-    bgzip ${bed_file}
-    tabix -0 -p bed -s 1 ${bed_file}.gz
+    bgzip ~{bed_file}
+    tabix -0 -p bed -s 1 ~{bed_file}.gz
       
 
     # run strelka
     configureStrelkaSomaticWorkflow.py \
-        --normalBam ${normalBam} \
-        --tumorBam ${tumorBam} \
-        --ref ${referenceFasta} \
+        --normalBam ~{normalBam} \
+        --tumorBam ~{tumorBam} \
+        --ref ~{referenceFasta} \
         --runDir tempDir \
-        --callRegions ${bed_file}.gz \
+        --callRegions ~{bed_file}.gz \
+        --indelCandidates ~{mantaCandidates} \
         --exome
 
     sed -i s/"isEmail = isLocalSmtp()"/"isEmail = False"/g tempDir/runWorkflow.py
@@ -815,24 +816,24 @@ task StrelkaSomatic {
     # Concatenate the SNVs and indels
     bcftools concat -a \
       --output-type v \
-      --output ${base_file_name}_${ref_file_name}.strelka.noGT.vcf \
+      --output ~{base_file_name}_~{ref_file_name}.strelka.noGT.vcf \
       tempDir/results/variants/somatic.indels.vcf.gz tempDir/results/variants/somatic.snvs.vcf.gz
 
     # Add in a dummy GT tag b/c Strelka doesn't do that and Annovar needs it.
-    first_format_num=$(grep -n -m 1 '##FORMAT' "${base_file_name}_${ref_file_name}.strelka.noGT.vcf" | cut -d : -f 1)
-    sed "$first_format_num"'i##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">' "${base_file_name}_${ref_file_name}.strelka.noGT.vcf" > "${base_file_name}_${ref_file_name}.strelka.vcf"
-    sed -ri 's|(DP:)|GT:\1|g' "${base_file_name}_${ref_file_name}.strelka.vcf"
-    sed -ri 's|(:BCN50\t)|\10/0:|g' "${base_file_name}_${ref_file_name}.strelka.vcf"
-    sed -ri 's|(:BCN50\t[^\t]*\t)|\10/1:|g' "${base_file_name}_${ref_file_name}.strelka.vcf"
+    first_format_num=$(grep -n -m 1 '##FORMAT' "~{base_file_name}_~{ref_file_name}.strelka.noGT.vcf" | cut -d : -f 1)
+    sed "$first_format_num"'i##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">' "~{base_file_name}_~{ref_file_name}.strelka.noGT.vcf" > "~{base_file_name}_~{ref_file_name}.strelka.vcf"
+    sed -ri 's|(DP:)|GT:\1|g' "~{base_file_name}_~{ref_file_name}.strelka.vcf"
+    sed -ri 's|(:BCN50\t)|\10/0:|g' "~{base_file_name}_~{ref_file_name}.strelka.vcf"
+    sed -ri 's|(:BCN50\t[^\t]*\t)|\10/1:|g' "~{base_file_name}_~{ref_file_name}.strelka.vcf"
 
     # Zip it and index it
-    bgzip ${base_file_name}_${ref_file_name}.strelka.vcf
-    tabix -0 -p vcf -s 1 ${base_file_name}_${ref_file_name}.strelka.vcf.gz
+    bgzip ~{base_file_name}_~{ref_file_name}.strelka.vcf
+    tabix -0 -p vcf -s 1 ~{base_file_name}_~{ref_file_name}.strelka.vcf.gz
 
     }
     output {
-      File vcf = "${base_file_name}_${ref_file_name}.strelka.vcf.gz"
-      File vcfIndex = "${base_file_name}_${ref_file_name}.strelka.vcf.gz.tbi"
+      File vcf = "~{base_file_name}_~{ref_file_name}.strelka.vcf.gz"
+      File vcfIndex = "~{base_file_name}_~{ref_file_name}.strelka.vcf.gz.tbi"
     }
     runtime {
       memory: "48 GB"
@@ -857,17 +858,17 @@ task CollectHsMetrics {
 
     gatk --java-options "-Xms2g" \
       CollectHsMetrics \
-      --INPUT=${input_bam} \
-      --OUTPUT=${base_file_name}.picard.metrics.txt \
-      --REFERENCE_SEQUENCE=${ref_fasta} \
+      --INPUT=~{input_bam} \
+      --OUTPUT=~{base_file_name}.picard.metrics.txt \
+      --REFERENCE_SEQUENCE=~{ref_fasta} \
       --ALLELE_FRACTION=0.01 \
-      --BAIT_INTERVALS=${intervals} \
-      --TARGET_INTERVALS=${intervals} \
-      --PER_TARGET_COVERAGE=${base_file_name}.picard.pertarget.txt 
+      --BAIT_INTERVALS=~{intervals} \
+      --TARGET_INTERVALS=~{intervals} \
+      --PER_TARGET_COVERAGE=~{base_file_name}.picard.pertarget.txt 
   }
   output {
-    File picardMetrics = "${base_file_name}.picard.metrics.txt"
-    File picardPerTarget = "${base_file_name}.picard.pertarget.txt"
+    File picardMetrics = "~{base_file_name}.picard.metrics.txt"
+    File picardPerTarget = "~{base_file_name}.picard.pertarget.txt"
   }
   runtime {
     memory: "4 GB"
@@ -890,12 +891,12 @@ task consensusFiltering {
   }
   command {
     set -eo pipefail
-    git clone --branch ${githubTag} ${githubRepoURL}
+    git clone --branch ~{githubTag} ~{githubRepoURL}
     Rscript ./tg-wdl-consensusVariants/paired/consensus-Mutect2-Strelka.R \
-      ${MutectVars} ${StrVars} ${base_file_name} ${molecular_id} ${ref_molecular_id}
+      ~{MutectVars} ~{StrVars} ~{base_file_name} ~{molecular_id} ~{ref_molecular_id}
   }
   output {
-    File consensusfile = "${base_file_name}.consensus.tsv"
+    File consensusfile = "~{base_file_name}.consensus.tsv"
   }
   runtime {
     memory: "2 GB"
@@ -920,9 +921,9 @@ task MarkDuplicatesSpark {
   command {
     gatk --java-options "-XX:+UseParallelGC -XX:ParallelGCThreads=4 -Dsamjdk.compression_level=5 -Xms32g" \
       MarkDuplicatesSpark \
-      --input ${input_bam} \
-      --output ${output_bam_basename}.bam \
-      --metrics-file ${metrics_filename} \
+      --input ~{input_bam} \
+      --output ~{output_bam_basename}.bam \
+      --metrics-file ~{metrics_filename} \
       --optical-duplicate-pixel-distance 2500 
   }
   runtime {
@@ -932,9 +933,9 @@ task MarkDuplicatesSpark {
     walltime: "6:00:00"
   }
   output {
-    File output_bam = "${output_bam_basename}.bam"
-    File output_bai = "${output_bam_basename}.bam.bai"
-    File duplicate_metrics = "${metrics_filename}"
+    File output_bam = "~{output_bam_basename}.bam"
+    File output_bai = "~{output_bam_basename}.bam.bai"
+    File duplicate_metrics = "~{metrics_filename}"
   }
 }
 
@@ -958,16 +959,16 @@ task MantaSomatic {
     mkdir tempDir
 
     # zip and index the bed file for Strelka
-    bgzip ${bed_file}
-    tabix -0 -p bed -s 1 ${bed_file}.gz
+    bgzip ~{bed_file}
+    tabix -0 -p bed -s 1 ~{bed_file}.gz
       
     # Run Manta
     configManta.py \
-      --normalBam ${normalBam} \
-      --tumorBam ${tumorBam} \
-      --referenceFasta ${referenceFasta} \
+      --normalBam ~{normalBam} \
+      --tumorBam ~{tumorBam} \
+      --referenceFasta ~{referenceFasta} \
       --runDir tempDir \
-      --callRegions ${bed_file}.gz \
+      --callRegions ~{bed_file}.gz \
       --exome
 
     tempDir/runWorkflow.py -m local
@@ -976,6 +977,7 @@ task MantaSomatic {
     cp tempDir/results/variants/diploidSV.vcf.gz ~{base_file_name}.~{ref_file_name}.diploidSV.vcf.gz
     cp tempDir/results/variants/candidateSV.vcf.gz ~{base_file_name}.~{ref_file_name}.candidateSV.vcf.gz
     cp tempDir/results/variants/candidateSmallIndels.vcf.gz ~{base_file_name}.~{ref_file_name}.candidateSmallIndels.vcf.gz
+    cp tempDir/results/variants/candidateSmallIndels.vcf.gz.tbi ~{base_file_name}.~{ref_file_name}.candidateSmallIndels.vcf.gz.tbi
 
     }
     output {
@@ -983,6 +985,7 @@ task MantaSomatic {
       File somaticSV = "~{base_file_name}.~{ref_file_name}.somaticSV.vcf.gz"
       File candidateSV = "~{base_file_name}.~{ref_file_name}.candidateSV.vcf.gz"
       File candidateSmallIndels = "~{base_file_name}.~{ref_file_name}.candidateSmallIndels.vcf.gz"
+      File candidateSmallIndelsIndx = "~{base_file_name}.~{ref_file_name}.candidateSmallIndels.vcf.gz.tbi"
     }
     runtime {
       memory: "48 GB"
@@ -991,3 +994,4 @@ task MantaSomatic {
       walltime: "18:00:00"
     }
 }
+
