@@ -15,6 +15,7 @@ version 1.0
 ## - Basic QC stats from bedtools for mean coverage over regions in panel
 ## - QC stats from Picard HSMetrics tool
 ## 
+## Workflow developed by Amy Paguirigan @ Fred Hutch LMD: 2/15/21 for use by Berger Lab @ Fred Hutch.
 workflow HybridCap_BWA_Mutect2_Strelka_Manta_AnnotatedVariants {
   input {
     # Batch and cohort information
