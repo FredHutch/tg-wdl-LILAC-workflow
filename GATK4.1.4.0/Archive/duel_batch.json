@@ -1,3 +1,0 @@
-{
-  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.batchFile": "s3://fh-pi-paguirigan-a-genomicsrepo/cromwell-manifests/FredHutch/tg-wdl-LILAC-workflow/2020-05-04-duel-4.1.4.0-test-pairofpairs.tsv"
-}

@@ -1,6 +1,0 @@
-{
-  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.batchFile": "s3://fh-pi-paguirigan-a-genomicsrepo/cromwell-manifests/FredHutch/tg-wdl-LILAC-workflow/2020-05-31-LILAC-75-pairs.tsv",
-  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.bedFile": "s3://fh-pi-paguirigan-a-genomicsrepo/repoReferenceData/bedFiles/dfci-v5Oncopanel3.1/Exome_Plus_POPv3.1_SV_ONLY_3191451_Covered_hg19-tabbed-numericChr.bed",
-  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.pon": "s3://fh-pi-berger-a/tg/LILAC-FARBER/TGR-Analyses/PanelOfNormals/c3847164-8320-4c98-9e6c-4749a32fe434/LILAC-allNormals.vcf.gz",
-  "HybridCap_BWA_Mutect2_Strelka_AnnotatedVariants.pon_index": "s3://fh-pi-berger-a/tg/LILAC-FARBER/TGR-Analyses/PanelOfNormals/c3847164-8320-4c98-9e6c-4749a32fe434/LILAC-allNormals.vcf.gz.tbi"
-}
